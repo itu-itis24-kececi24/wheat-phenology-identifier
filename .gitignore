@@ -1,0 +1,6 @@
+.venv
+.codex_remote_analysis
+.agents
+__pycache__
+data
+demo
