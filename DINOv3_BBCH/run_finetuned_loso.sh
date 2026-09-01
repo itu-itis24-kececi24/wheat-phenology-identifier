@@ -26,6 +26,15 @@ IMAGE_BACKBONE="${IMAGE_BACKBONE:-facebook/dinov3-vitb16-pretrain-lvd1689m}"
 # corresponding temporal fold has produced final test metrics. Set to 1 to keep.
 KEEP_CACHES="${KEEP_CACHES:-0}"
 
+GPU_ID="${GPU_ID:-0}"
+export CUDA_VISIBLE_DEVICES="${GPU_ID}"
+
+# CUDA_VISIBLE_DEVICES remaps the selected physical GPU to logical GPU 0.
+DEVICE="cuda:0"
+
+echo "Physical GPU: ${GPU_ID}"
+echo "Process-local PyTorch device: ${DEVICE}"
+
 if [[ ! -f "${LABEL_PATH}" ]]; then
   echo "Label file not found: ${LABEL_PATH}" >&2
   exit 1
@@ -133,7 +142,7 @@ for fold in $(seq "${FOLD_START}" "${FOLD_END}"); do
       --exclude-offseason \
       --num-workers 4 \
       --seed "${SEED}" \
-      --device cuda
+      --device "${DEVICE}"
   fi
 
   if [[ -f "${temporal_done}" ]]; then
@@ -162,8 +171,10 @@ for fold in $(seq "${FOLD_START}" "${FOLD_END}"); do
         --dense-include-cls \
         --embedding-dtype float16 \
         --batch-size 256 \
+        --image-batch-size 16 \
         --num-workers 8 \
-        --device cuda
+        --prefetch-factor 4 \
+        --device "${DEVICE}"
     fi
 
     echo "[fold ${fold}] Training temporal model on generated LOSO fold ${fold}..."
@@ -220,7 +231,7 @@ for fold in $(seq "${FOLD_START}" "${FOLD_END}"); do
       --location-gate-init 0.1 \
       --exclude-offseason \
       --monotonic-decoding none \
-      --device cuda \
+      --device "${DEVICE}" \
       --log-interval 50 \
       "${resume_args[@]}"
   fi

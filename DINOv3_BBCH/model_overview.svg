@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1080" viewBox="0 0 1800 1080">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 12 6 L 0 12 z" fill="#15803d"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0f172a" flood-opacity="0.13"/>
+    </filter>
+    <style>
+      .title { font: 700 32px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 17px Arial, sans-serif; fill: #475569; }
+      .box-title { font: 700 19px Arial, sans-serif; fill: #0f172a; }
+      .box-text { font: 400 16px Arial, sans-serif; fill: #334155; }
+      .small { font: 400 14px Arial, sans-serif; fill: #475569; }
+      .tiny { font: 400 13px Arial, sans-serif; fill: #64748b; }
+      .label { font: 600 15px Arial, sans-serif; fill: #334155; }
+      .main { fill: #eff6ff; stroke: #2563eb; stroke-width: 2.2; }
+      .metadata { fill: #f0fdf4; stroke: #15803d; stroke-width: 2.2; }
+      .fusion { fill: #fff7ed; stroke: #c2410c; stroke-width: 2.2; }
+      .output { fill: #f8fafc; stroke: #475569; stroke-width: 2.2; }
+      .decoder { fill: #fefce8; stroke: #a16207; stroke-width: 2.2; stroke-dasharray: 7 5; }
+      .arrow { stroke: #334155; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .arrow-blue { stroke: #2563eb; stroke-width: 2.5; fill: none; marker-end: url(#arrowBlue); }
+      .arrow-green { stroke: #15803d; stroke-width: 2.5; fill: none; marker-end: url(#arrowGreen); }
+      .dash { stroke-dasharray: 8 6; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1080" fill="#ffffff"/>
+  <text x="900" y="52" text-anchor="middle" class="title">DINOv3 Wheat Phenology Classification</text>
+  <text x="900" y="82" text-anchor="middle" class="subtitle">Past-only temporal window with learned metadata fusion and optional monotonic decoding</text>
+
+  <!-- Input -->
+  <g filter="url(#shadow)">
+    <rect x="55" y="195" width="220" height="190" rx="10" class="main"/>
+    <text x="165" y="230" text-anchor="middle" class="box-title">Daily crop images</text>
+    <text x="165" y="266" text-anchor="middle" class="box-text">micro / 10× camera stream</text>
+    <text x="165" y="300" text-anchor="middle" class="box-text">t − T + 1, …, t</text>
+    <text x="165" y="338" text-anchor="middle" class="small">JPEG frames</text>
+    <text x="165" y="363" text-anchor="middle" class="tiny">Missing days are masked</text>
+  </g>
+
+  <!-- DINO -->
+  <g filter="url(#shadow)">
+    <rect x="335" y="195" width="250" height="190" rx="10" class="main"/>
+    <text x="460" y="230" text-anchor="middle" class="box-title">Fine-tuned DINOv3</text>
+    <text x="460" y="266" text-anchor="middle" class="box-text">ViT image backbone</text>
+    <text x="460" y="300" text-anchor="middle" class="box-text">patch / dense features</text>
+    <text x="460" y="338" text-anchor="middle" class="small">Frozen during temporal training</text>
+    <text x="460" y="363" text-anchor="middle" class="tiny">Precomputed embedding cache</text>
+  </g>
+
+  <!-- Pool -->
+  <g filter="url(#shadow)">
+    <rect x="645" y="195" width="245" height="190" rx="10" class="main"/>
+    <text x="767" y="230" text-anchor="middle" class="box-title">Tile attention pooling</text>
+    <text x="767" y="266" text-anchor="middle" class="box-text">learned tile weighting</text>
+    <text x="767" y="300" text-anchor="middle" class="box-text">one vector per day</text>
+    <text x="767" y="340" text-anchor="middle" class="small">xₜ ∈ Rᴰ</text>
+    <text x="767" y="365" text-anchor="middle" class="tiny">D = backbone embedding size</text>
+  </g>
+
+  <!-- Daily metadata -->
+  <g filter="url(#shadow)">
+    <rect x="55" y="585" width="270" height="205" rx="10" class="metadata"/>
+    <text x="190" y="620" text-anchor="middle" class="box-title">Daily metadata</text>
+    <text x="190" y="657" text-anchor="middle" class="box-text">days since planting</text>
+    <text x="190" y="688" text-anchor="middle" class="box-text">optional weather / GDD</text>
+    <text x="190" y="731" text-anchor="middle" class="small">fₜ ∈ Rᶠ</text>
+    <text x="190" y="758" text-anchor="middle" class="tiny">one vector for each date</text>
+  </g>
+
+  <!-- Daily MLP -->
+  <g filter="url(#shadow)">
+    <rect x="385" y="585" width="250" height="205" rx="10" class="metadata"/>
+    <text x="510" y="620" text-anchor="middle" class="box-title">Metadata MLPs</text>
+    <text x="510" y="657" text-anchor="middle" class="box-text">Linear → GELU</text>
+    <text x="510" y="688" text-anchor="middle" class="box-text">Dropout → Linear</text>
+    <text x="510" y="731" text-anchor="middle" class="small">mₜ ∈ Rᴰ</text>
+    <text x="510" y="758" text-anchor="middle" class="tiny">projected into image space</text>
+  </g>
+
+  <!-- Fusion -->
+  <g filter="url(#shadow)">
+    <rect x="710" y="545" width="300" height="285" rx="10" class="fusion"/>
+    <text x="860" y="580" text-anchor="middle" class="box-title">Gated daily fusion</text>
+    <text x="860" y="625" text-anchor="middle" class="box-text">zₜ = xₜ + g · mₜ</text>
+    <text x="860" y="673" text-anchor="middle" class="box-text">g = sigmoid(learned gate)</text>
+    <text x="860" y="721" text-anchor="middle" class="small">image evidence remains primary</text>
+    <text x="860" y="754" text-anchor="middle" class="small">metadata supplies timing context</text>
+    <text x="860" y="795" text-anchor="middle" class="tiny">Z ∈ Rᴮ×ᵀ×ᴰ</text>
+  </g>
+
+  <!-- Sequence -->
+  <g filter="url(#shadow)">
+    <rect x="1080" y="195" width="285" height="190" rx="10" class="main"/>
+    <text x="1222" y="230" text-anchor="middle" class="box-title">Temporal Transformer</text>
+    <text x="1222" y="266" text-anchor="middle" class="box-text">positional encoding</text>
+    <text x="1222" y="300" text-anchor="middle" class="box-text">past-only window</text>
+    <text x="1222" y="340" text-anchor="middle" class="small">CLS / target aggregation</text>
+    <text x="1222" y="365" text-anchor="middle" class="tiny">captures growth trajectory</text>
+  </g>
+
+  <!-- Location -->
+  <g filter="url(#shadow)">
+    <rect x="1080" y="585" width="285" height="205" rx="10" class="metadata"/>
+    <text x="1222" y="620" text-anchor="middle" class="box-title">Station metadata</text>
+    <text x="1222" y="657" text-anchor="middle" class="box-text">latitude, longitude</text>
+    <text x="1222" y="688" text-anchor="middle" class="box-text">elevation</text>
+    <text x="1222" y="731" text-anchor="middle" class="small">location MLP → Rᴰ</text>
+    <text x="1222" y="758" text-anchor="middle" class="tiny">fused after sequence aggregation</text>
+  </g>
+
+  <!-- Classifier -->
+  <g filter="url(#shadow)">
+    <rect x="1445" y="195" width="245" height="190" rx="10" class="output"/>
+    <text x="1567" y="230" text-anchor="middle" class="box-title">Classification head</text>
+    <text x="1567" y="266" text-anchor="middle" class="box-text">LayerNorm</text>
+    <text x="1567" y="300" text-anchor="middle" class="box-text">Linear → stage logits</text>
+    <text x="1567" y="340" text-anchor="middle" class="small">softmax probabilities</text>
+    <text x="1567" y="365" text-anchor="middle" class="tiny">raw BBCH prediction</text>
+  </g>
+
+  <!-- Raw output and decoder -->
+  <g filter="url(#shadow)">
+    <rect x="1445" y="585" width="245" height="205" rx="10" class="output"/>
+    <text x="1567" y="620" text-anchor="middle" class="box-title">Raw result</text>
+    <text x="1567" y="657" text-anchor="middle" class="box-text">BBCH stage</text>
+    <text x="1567" y="688" text-anchor="middle" class="box-text">class probabilities</text>
+    <text x="1567" y="731" text-anchor="middle" class="small">saved for evaluation</text>
+    <text x="1567" y="758" text-anchor="middle" class="tiny">no temporal correction</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="1445" y="885" width="245" height="125" rx="10" class="decoder"/>
+    <text x="1567" y="921" text-anchor="middle" class="box-title">Optional Viterbi</text>
+    <text x="1567" y="951" text-anchor="middle" class="box-text">non-regressing stages</text>
+    <text x="1567" y="980" text-anchor="middle" class="small">final decoded sequence</text>
+  </g>
+
+  <!-- Arrows -->
+  <path d="M275 290 L335 290" class="arrow"/>
+  <path d="M585 290 L645 290" class="arrow"/>
+  <path d="M890 290 L1080 290" class="arrow"/>
+  <path d="M325 685 L385 685" class="arrow-green"/>
+  <path d="M635 685 L710 685" class="arrow-green"/>
+  <path d="M767 385 C767 455 860 475 860 545" class="arrow-blue"/>
+  <path d="M860 545 C860 455 1010 435 1080 340" class="arrow-blue"/>
+  <path d="M1365 290 L1445 290" class="arrow"/>
+  <path d="M1222 385 L1222 585" class="arrow-green dash"/>
+  <path d="M1365 685 L1445 685" class="arrow-green"/>
+  <path d="M1567 790 L1567 885" class="arrow"/>
+
+  <!-- Labels -->
+  <text x="950" y="270" text-anchor="middle" class="label">daily fused sequence</text>
+  <text x="960" y="515" text-anchor="middle" class="label">Z ∈ Rᴮ×ᵀ×ᴰ</text>
+  <text x="1290" y="490" text-anchor="middle" class="label">sequence representation</text>
+  <text x="1710" y="850" text-anchor="middle" class="tiny">offline post-processing</text>
+
+  <!-- Legend -->
+  <line x1="70" y1="930" x2="110" y2="930" class="arrow-blue"/>
+  <text x="125" y="935" class="small">image / temporal flow</text>
+  <line x1="320" y1="930" x2="360" y2="930" class="arrow-green"/>
+  <text x="375" y="935" class="small">metadata flow</text>
+  <rect x="535" y="913" width="20" height="20" class="decoder"/>
+  <text x="570" y="935" class="small">optional decoder</text>
+
+  <text x="900" y="1045" text-anchor="middle" class="tiny">Figure: image embeddings are computed per day; daily metadata is fused before temporal modeling, while station metadata is fused after temporal aggregation.</text>
+</svg>

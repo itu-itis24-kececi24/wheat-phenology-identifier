@@ -10,6 +10,8 @@ features instead of reducing every crop to one global vector.
 
 ## Architecture
 
+![DINOv3 wheat phenology model overview](model_overview.svg)
+
 For the usual `--stream micro` setup:
 
 1. Each full-resolution 10X image is divided into overlapping crops.
@@ -70,14 +72,24 @@ python DINOv3_BBCH/precompute_multiscale_embeddings.py \
   --dense-grid-size 2 \
   --dense-include-cls \
   --embedding-dtype float16 \
-  --batch-size 64 \
-  --num-workers 4 \
+  --batch-size 256 \
+  --image-batch-size 16 \
+  --num-workers 32 \
+  --prefetch-factor 4 \
   --device cuda
 ```
 
 The output cache records the backbone, preprocessing, register-token count,
 patch size, dense grid, dense streams, and descriptors per tile. A DINOv2 cache
 cannot be reused because the feature extractor and cache structure differ.
+
+Precomputation decodes and tiles source images concurrently, packs tiles from
+multiple images, and feeds full `--batch-size` tile chunks to the GPU. Increase
+`--num-workers` until storage or CPU decoding is saturated, then increase
+`--image-batch-size` enough to keep at least one full GPU tile batch ready.
+`--prefetch-factor` controls how many source-image batches each worker prepares
+ahead of time. The cache records these throughput settings for reproducibility;
+they do not change the resulting embedding format.
 
 `--dense-grid-size 2` stores five descriptors per crop with CLS enabled. A 4x4
 grid stores 17 and uses about 3.4 times as much cache/RAM as the default. Start

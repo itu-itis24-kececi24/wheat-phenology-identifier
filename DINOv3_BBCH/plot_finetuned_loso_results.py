@@ -3,7 +3,8 @@
 The Taylor diagram treats BBCH class indices as an ordinal sequence. It compares
 the predicted and true stage trajectories within each held-out station. This is
 a diagnostic complement to classification metrics, not a replacement for
-macro-F1, exact accuracy, or the confusion matrix.
+macro-F1 or exact accuracy. Aggregate confusion matrices report both sample
+counts and row-normalized rates.
 """
 
 from __future__ import annotations
@@ -27,7 +28,10 @@ OKABE_ITO = ["#0072B2", "#E69F00", "#009E73", "#D55E00", "#CC79A7", "#56B4E9", "
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Plot Taylor and box-and-whisker diagnostics for LOSO results."
+        description=(
+            "Plot Taylor, box-and-whisker, and aggregate confusion-matrix "
+            "diagnostics for LOSO results."
+        )
     )
     parser.add_argument(
         "--results-dir",
@@ -188,6 +192,127 @@ def save_figure(fig: plt.Figure, out_dir: Path, stem: str, dpi: int) -> None:
     fig.savefig(out_dir / f"{stem}.pdf")
     fig.savefig(out_dir / f"{stem}.png", dpi=dpi)
     plt.close(fig)
+
+
+def aggregate_confusion_matrix(
+    predictions: pd.DataFrame,
+    prediction_column: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if prediction_column not in predictions.columns:
+        raise ValueError(f"Prediction column {prediction_column!r} is missing")
+
+    true_idx = pd.to_numeric(predictions["true_idx"], errors="raise").to_numpy(dtype=int)
+    pred_idx = pd.to_numeric(
+        predictions[prediction_column], errors="raise"
+    ).to_numpy(dtype=int)
+    class_count = len(CLASS_ORDER)
+    if (
+        np.any(true_idx < 0)
+        or np.any(true_idx >= class_count)
+        or np.any(pred_idx < 0)
+        or np.any(pred_idx >= class_count)
+    ):
+        raise ValueError(
+            f"Class indices must be between 0 and {class_count - 1} for {CLASS_ORDER}"
+        )
+
+    counts = np.zeros((class_count, class_count), dtype=np.int64)
+    np.add.at(counts, (true_idx, pred_idx), 1)
+    row_totals = counts.sum(axis=1, keepdims=True)
+    normalized = np.divide(
+        counts,
+        row_totals,
+        out=np.zeros_like(counts, dtype=np.float64),
+        where=row_totals > 0,
+    )
+    return (
+        pd.DataFrame(counts, index=CLASS_ORDER, columns=CLASS_ORDER),
+        pd.DataFrame(normalized, index=CLASS_ORDER, columns=CLASS_ORDER),
+    )
+
+
+def plot_confusion_matrix(
+    counts: pd.DataFrame,
+    normalized: pd.DataFrame,
+    out_dir: Path,
+    dpi: int,
+    *,
+    stem: str,
+    title: str,
+) -> None:
+    values = normalized.to_numpy(dtype=np.float64)
+    count_values = counts.to_numpy(dtype=np.int64)
+    figure_size = max(5.2, 0.72 * len(CLASS_ORDER) + 1.5)
+    fig, ax = plt.subplots(figsize=(figure_size, figure_size - 0.3))
+    image = ax.imshow(values, cmap="Blues", vmin=0.0, vmax=1.0, aspect="equal")
+
+    ax.set_xticks(np.arange(len(CLASS_ORDER)), labels=CLASS_ORDER, rotation=38, ha="right")
+    ax.set_yticks(np.arange(len(CLASS_ORDER)), labels=CLASS_ORDER)
+    ax.set_xlabel("Predicted stage")
+    ax.set_ylabel("True stage")
+    ax.set_title(title, pad=10)
+    ax.set_xticks(np.arange(-0.5, len(CLASS_ORDER), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(CLASS_ORDER), 1), minor=True)
+    ax.grid(which="minor", color="white", linewidth=1.4)
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+    for row in range(len(CLASS_ORDER)):
+        for column in range(len(CLASS_ORDER)):
+            count = int(count_values[row, column])
+            if count == 0:
+                continue
+            rate = float(values[row, column])
+            color = "white" if rate >= 0.52 else "#263238"
+            ax.text(
+                column,
+                row,
+                f"{count}\n{rate:.2f}",
+                ha="center",
+                va="center",
+                fontsize=7.4,
+                color=color,
+                fontweight="bold" if row == column else "normal",
+            )
+
+    colorbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    colorbar.set_label("Row-normalized proportion")
+    fig.text(
+        0.5,
+        0.015,
+        "Cells show sample count and row-normalized proportion.",
+        ha="center",
+        fontsize=8,
+        color="#455A64",
+    )
+    fig.subplots_adjust(left=0.16, right=0.91, top=0.91, bottom=0.17)
+    save_figure(fig, out_dir, stem, dpi)
+
+
+def save_confusion_outputs(
+    predictions: pd.DataFrame,
+    out_dir: Path,
+    dpi: int,
+    *,
+    prediction_column: str,
+    stem: str,
+    title: str,
+) -> None:
+    counts, normalized = aggregate_confusion_matrix(predictions, prediction_column)
+    counts.to_csv(out_dir / f"{stem}.csv", index_label="true_stage")
+    normalized.to_csv(
+        out_dir / f"{stem}_normalized.csv",
+        index_label="true_stage",
+    )
+    plot_confusion_matrix(
+        counts,
+        normalized,
+        out_dir,
+        dpi,
+        stem=stem,
+        title=title,
+    )
+    print(f"\n{title} (counts)")
+    print(counts.to_string())
 
 
 def plot_taylor(stats: pd.DataFrame, out_dir: Path, dpi: int) -> None:
@@ -477,6 +602,31 @@ def main() -> None:
     set_publication_style()
     plot_taylor(stats, out_dir, args.dpi)
     plot_box_whisker(metrics, stats, out_dir, args.dpi)
+    save_confusion_outputs(
+        predictions,
+        out_dir,
+        args.dpi,
+        prediction_column="pred_idx",
+        stem="finetuned_loso_confusion_matrix",
+        title="Fine-tuned DINOv3 LOSO: aggregate confusion matrix",
+    )
+    has_decoded_changes = False
+    if "decoded_pred_idx" in predictions.columns:
+        decoded = pd.to_numeric(predictions["decoded_pred_idx"], errors="coerce")
+        raw = pd.to_numeric(predictions["pred_idx"], errors="raise")
+        valid_decoded = decoded.notna()
+        has_decoded_changes = bool(
+            valid_decoded.any() and (decoded[valid_decoded] != raw[valid_decoded]).any()
+        )
+    if has_decoded_changes:
+        save_confusion_outputs(
+            predictions,
+            out_dir,
+            args.dpi,
+            prediction_column="decoded_pred_idx",
+            stem="finetuned_loso_monotonic_confusion_matrix",
+            title="Fine-tuned DINOv3 LOSO: monotonic aggregate confusion matrix",
+        )
     print(f"Loaded {len(predictions)} predictions from {predictions.fold.nunique()} folds")
     print(f"Saved plots and source tables to {out_dir}")
 

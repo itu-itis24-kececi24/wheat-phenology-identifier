@@ -205,12 +205,13 @@ class TiledImagePathDataset(Dataset):
             }
 
 
-def single_item_collate(batch: List[Dict]) -> Dict:
-    return batch[0]
-
-
 def image_item_collate(batch: List[Dict]) -> List[Dict]:
     return batch
+
+
+def configure_loader_worker(_worker_id: int) -> None:
+    """Prevent each image worker from creating its own large CPU thread pool."""
+    torch.set_num_threads(1)
 
 
 def autocast_context(device: torch.device, amp_dtype: Optional[torch.dtype]):
@@ -270,7 +271,7 @@ def select_tiles(boxes: List[Tuple[int, int, int, int]], max_tiles: int) -> List
     return [boxes[i] for i in indices]
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def encode_paths(
     model,
     paths: List[str],
@@ -289,6 +290,7 @@ def encode_paths(
     rotation: float = 5.0,
     blur_prob: float = 0.15,
     amp_dtype: Optional[torch.dtype] = None,
+    prefetch_factor: int = 4,
 ) -> dict:
     dataset = ImagePathDataset(
         paths,
@@ -303,14 +305,22 @@ def encode_paths(
         rotation=rotation,
         blur_prob=blur_prob,
     )
-    loader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=device.type == "cuda",
-        collate_fn=image_item_collate,
-    )
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "shuffle": False,
+        "num_workers": num_workers,
+        "pin_memory": device.type == "cuda",
+        "collate_fn": image_item_collate,
+    }
+    if num_workers > 0:
+        loader_kwargs.update(
+            {
+                "prefetch_factor": max(1, int(prefetch_factor)),
+                "persistent_workers": True,
+                "worker_init_fn": configure_loader_worker,
+            }
+        )
+    loader = DataLoader(dataset, **loader_kwargs)
     encoded = {}
     model.eval()
     for items in loader:
@@ -331,7 +341,7 @@ def encode_paths(
     return encoded
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def encode_tiled_paths(
     model,
     paths: List[str],
@@ -357,7 +367,13 @@ def encode_tiled_paths(
     dense_features: bool = True,
     dense_grid_size: int = 2,
     dense_include_cls: bool = True,
+    image_batch_size: int = 8,
+    prefetch_factor: int = 4,
 ) -> Tuple[dict, dict, dict]:
+    if batch_size < 1:
+        raise ValueError("batch_size must be at least 1")
+    if image_batch_size < 1:
+        raise ValueError("image_batch_size must be at least 1")
     dataset = TiledImagePathDataset(
         paths,
         tile_size=tile_size,
@@ -375,54 +391,93 @@ def encode_tiled_paths(
         blur_prob=blur_prob,
     )
     loader_kwargs = {
-        "batch_size": 1,
+        "batch_size": image_batch_size,
         "shuffle": False,
         "num_workers": num_workers,
         "pin_memory": device.type == "cuda",
-        "collate_fn": single_item_collate,
+        "collate_fn": image_item_collate,
     }
     if num_workers > 0:
-        loader_kwargs["prefetch_factor"] = 1
-        loader_kwargs["persistent_workers"] = True
+        loader_kwargs.update(
+            {
+                "prefetch_factor": max(1, int(prefetch_factor)),
+                "persistent_workers": True,
+                "worker_init_fn": configure_loader_worker,
+            }
+        )
     loader = DataLoader(dataset, **loader_kwargs)
     encoded = {}
     tile_counts = {}
     failures = {}
     model.eval()
 
-    for idx, item in enumerate(loader, 1):
-        key = item["path"]
-        if item["error"] is not None:
-            failures[key] = item["error"]
-            print(f"Skipping corrupt/unreadable tiled image {idx}/{len(paths)}: {key} ({item['error']})")
+    total_paths = len(paths)
+    processed_count = 0
+
+    for items in loader:
+        valid_items = []
+        for item in items:
+            key = item["path"]
+            processed_count += 1
+            if item["error"] is not None:
+                failures[key] = item["error"]
+                print(f"Skipping corrupt image {processed_count}/{total_paths}: {key} ({item['error']})")
+            else:
+                valid_items.append(item)
+
+        if not valid_items:
             continue
 
-        tiles = item["tiles"]
-        tile_counts[key] = int(item["tile_count"])
-        features = []
-        for start in range(0, tiles.shape[0], batch_size):
-            batch = tiles[start:start + batch_size]
-            batch = batch.to(device, non_blocking=True)
+        all_tiles = []
+        image_tile_slices = []
+        curr_idx = 0
+
+        for item in valid_items:
+            key = item["path"]
+            tiles = item["tiles"]  # [N_Tiles, C, H, W]
+            tile_counts[key] = int(item["tile_count"])
+            n_t = tiles.shape[0]
+            all_tiles.append(tiles)
+            image_tile_slices.append((key, curr_idx, curr_idx + n_t))
+            curr_idx += n_t
+
+        flat_tiles = torch.cat(all_tiles, dim=0)  # [Total_Tiles, C, H, W]
+        if device.type == "cuda" and not flat_tiles.is_pinned():
+            flat_tiles = flat_tiles.pin_memory()
+
+        # Chunked GPU forward pass for all tiles in the current image batch
+        flat_features = []
+        for start in range(0, flat_tiles.shape[0], batch_size):
+            tile_chunk = flat_tiles[start : start + batch_size].to(device, non_blocking=True)
             with autocast_context(device, amp_dtype):
-                batch_features = (
+                chunk_features = (
                     model.forward_dense(
-                        batch,
+                        tile_chunk,
                         grid_size=dense_grid_size,
                         include_cls=dense_include_cls,
                     )
                     if dense_features
-                    else model(batch)
+                    else model(tile_chunk)
                 )
-                features.append(batch_features.detach().to("cpu", dtype=output_dtype))
+                flat_features.append(chunk_features.detach().to("cpu", dtype=output_dtype))
 
-        tile_features = torch.cat(features, dim=0)
-        encoded[key] = (
-            tile_features
-            if tile_pooling == "attention"
-            else tile_features.mean(dim=0).to(output_dtype)
-        )
-        if idx == 1 or idx % 25 == 0 or idx == len(paths):
-            print(f"Encoded tiled image {idx}/{len(paths)} ({tile_counts[key]} tiles/image for current image)")
+        all_features = torch.cat(flat_features, dim=0)
+
+        # Map batch features back to individual image paths
+        for key, start, end in image_tile_slices:
+            tile_feats = all_features[start:end]
+            encoded[key] = (
+                tile_feats
+                if tile_pooling == "attention"
+                else tile_feats.mean(dim=0).to(output_dtype)
+            )
+
+        if processed_count == len(items) or processed_count % 25 < len(items) or processed_count == total_paths:
+            batch_tile_count = sum(tile_counts[item["path"]] for item in valid_items)
+            print(
+                f"Encoded tiled images {processed_count - len(items) + 1}-{processed_count}/{total_paths} "
+                f"({batch_tile_count} tiles in batch)"
+            )
 
     if failures:
         print(f"Skipped {len(failures)} corrupt/unreadable tiled images")
@@ -458,8 +513,25 @@ def main():
     parser.add_argument("--data-path", default="data")
     parser.add_argument("--out-dir", default="results_dinov3_bbch_cache")
     parser.add_argument("--cache-path", default=None)
-    parser.add_argument("--batch-size", type=int, default=32)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--batch-size", type=int, default=64, help="Maximum number of tiles or untiled images per GPU forward pass.")
+    parser.add_argument(
+        "--image-batch-size",
+        type=int,
+        default=8,
+        help="Number of tiled source images decoded and packed together before GPU forwarding.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=max(1, os.cpu_count() or 4),
+        help="Parallel image decode/tile workers. Defaults to all detected CPU cores.",
+    )
+    parser.add_argument(
+        "--prefetch-factor",
+        type=int,
+        default=4,
+        help="Source-image batches prefetched by each worker.",
+    )
     parser.add_argument("--transition-days", type=int, default=2)
     parser.add_argument("--date-tolerance-days", type=int, default=7, help="Days outside a predicted stage window that still receive partial metric credit.")
     parser.add_argument("--preplant-days", type=int, default=30, help="Number of days before seeding to keep as OffSeason.")
@@ -496,6 +568,14 @@ def main():
 
     if args.dense_grid_size < 1:
         parser.error("--dense-grid-size must be at least 1")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be at least 1")
+    if args.image_batch_size < 1:
+        parser.error("--image-batch-size must be at least 1")
+    if args.num_workers < 0:
+        parser.error("--num-workers cannot be negative")
+    if args.prefetch_factor < 1:
+        parser.error("--prefetch-factor must be at least 1")
     if args.dense_features and args.tile_pooling != "attention":
         parser.error("--dense-features requires --tile-pooling attention so patch/tile hierarchy is preserved")
 
@@ -562,6 +642,10 @@ def main():
         )
     )
     print(f"Embedding extraction AMP: {str(amp_dtype).replace('torch.', '') if amp_dtype is not None else 'disabled'}")
+    print(
+        f"Throughput settings: tile batch={args.batch_size}, image batch={args.image_batch_size}, "
+        f"workers={args.num_workers}, prefetch={args.prefetch_factor}"
+    )
     tile_streams = {args.tile_streams} if args.tile_streams in {"macro", "micro"} else {"macro", "micro"} if args.tile_streams == "both" else set()
     if args.augment_streams == "auto":
         augment_streams = {args.stream} if args.stream in {"macro", "micro"} else {"macro", "micro"} if args.stream == "both" else set()
@@ -606,6 +690,8 @@ def main():
                 dense_features=args.dense_features,
                 dense_grid_size=args.dense_grid_size,
                 dense_include_cls=args.dense_include_cls,
+                image_batch_size=args.image_batch_size,
+                prefetch_factor=args.prefetch_factor,
             )
         print(f"Encoding {stream_name} images" + (" with augmentation" if augment else ""))
         embeddings = encode_paths(
@@ -626,6 +712,7 @@ def main():
             rotation=args.augment_rotation,
             blur_prob=args.augment_blur_prob,
             amp_dtype=amp_dtype,
+            prefetch_factor=args.prefetch_factor,
         )
         return embeddings, {}, {}
 
@@ -665,6 +752,13 @@ def main():
             "image_backbone": getattr(model, "backbone_name", args.image_backbone),
             "backbone_source": getattr(model, "backbone_source", "torchvision"),
             "pretrained": args.pretrained,
+            "throughput": {
+                "batch_size": args.batch_size,
+                "image_batch_size": args.image_batch_size,
+                "num_workers": args.num_workers,
+                "prefetch_factor": args.prefetch_factor,
+                "amp": args.amp,
+            },
             "preprocess": {
                 "image_size": args.vit_image_size,
                 "backbone_default_image_size": preprocess_image_size,

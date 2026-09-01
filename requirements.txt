@@ -1,6 +1,7 @@
 pandas
 numpy
 pillow
+opencv-python-headless
 torch
 torchvision
 transformers

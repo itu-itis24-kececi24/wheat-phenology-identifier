@@ -1,0 +1,1 @@
+-r ../DINOv3_BBCH/requirements.txt

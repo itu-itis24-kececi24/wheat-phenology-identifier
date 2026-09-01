@@ -4,3 +4,13 @@
 __pycache__
 data
 demo
+!demo/
+demo/*
+!demo/label_station_year.py
+!demo/STATION_YEAR_LABELING.md
+!demo/
+demo/*
+!demo/label_station_year.py
+!demo/STATION_YEAR_LABELING.md
+/paper
+/tests

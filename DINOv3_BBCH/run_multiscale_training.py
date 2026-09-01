@@ -107,11 +107,11 @@ BRIEF_HISTORY_COLUMNS = [
     "epoch",
     "train_loss",
     "train_accuracy",
-    "train_plus_minus_1_accuracy",
+    "train_macro_f1",
     "train_date_window_accuracy",
     "val_loss",
     "val_accuracy",
-    "val_plus_minus_1_accuracy",
+    "val_macro_f1",
     "val_date_window_accuracy",
 ]
 
